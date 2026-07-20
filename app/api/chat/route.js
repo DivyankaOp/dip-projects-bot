@@ -1,7 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { toolDefinitions, runTool } from "@/lib/anthropic-tools";
+import { GoogleGenAI } from "@google/genai";
+import { toolDefinitions, runTool } from "@/lib/gemini-tools";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const SYSTEM_PROMPT = `Tum ek task-management assistant ho jo Hinglish (Hindi + English mix, Roman script) mein baat karta hai, bilkul user ke tone mein.
 
@@ -28,44 +28,49 @@ export async function POST(req) {
   try {
     const { messages } = await req.json();
 
-    let conversation = messages;
+    let contents = messages.map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }]
+    }));
+
     let finalText = "";
     let guard = 0;
 
     while (guard < 6) {
       guard++;
-      const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1500,
-        system: SYSTEM_PROMPT,
-        tools: toolDefinitions,
-        messages: conversation
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents,
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          tools: [{ functionDeclarations: toolDefinitions }]
+        }
       });
 
-      const toolUses = response.content.filter((b) => b.type === "tool_use");
-      const textBlocks = response.content.filter((b) => b.type === "text");
-      finalText = textBlocks.map((b) => b.text).join("\n");
+      const calls = response.functionCalls || [];
+      const modelParts = response.candidates?.[0]?.content?.parts || [{ text: response.text || "" }];
 
-      if (toolUses.length === 0) {
-        conversation = [...conversation, { role: "assistant", content: response.content }];
+      contents.push({ role: "model", parts: modelParts });
+
+      if (calls.length === 0) {
+        finalText = response.text || "";
         break;
       }
 
-      conversation = [...conversation, { role: "assistant", content: response.content }];
-
-      const toolResults = [];
-      for (const tu of toolUses) {
-        const result = await runTool(tu.name, tu.input);
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: tu.id,
-          content: JSON.stringify(result)
+      const responseParts = [];
+      for (const call of calls) {
+        const result = await runTool(call.name, call.args || {});
+        responseParts.push({
+          functionResponse: {
+            name: call.name,
+            response: result
+          }
         });
       }
-      conversation = [...conversation, { role: "user", content: toolResults }];
+      contents.push({ role: "user", parts: responseParts });
     }
 
-    return Response.json({ reply: finalText, messages: conversation });
+    return Response.json({ reply: finalText });
   } catch (err) {
     console.error(err);
     return Response.json({ error: err.message || "Kuch galat ho gaya" }, { status: 500 });

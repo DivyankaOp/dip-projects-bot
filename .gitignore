@@ -1,6 +1,5 @@
-node_modules/
-.next/
-.env.local
+__pycache__/
+*.pyc
 .env
-.vercel
-*.log
+venv/
+.venv/

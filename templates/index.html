@@ -76,6 +76,7 @@ const chat = document.getElementById('chat');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
+const sessionId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
 
 function addMsg(text, cls, sources) {
   const div = document.createElement('div');
@@ -122,7 +123,7 @@ form.addEventListener('submit', async (e) => {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({question})
+      body: JSON.stringify({question, session_id: sessionId})
     });
     const data = await res.json();
     typing.remove();

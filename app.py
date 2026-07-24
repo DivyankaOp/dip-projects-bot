@@ -73,7 +73,7 @@ def fetch_tab_csv(spreadsheet_id: str, sheet_name: str) -> str:
     return resp.text
 
 
-def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB) -> str:
+def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB, today_filter: bool = False) -> str:
     """CSV ko readable text table mein badalta hai aur bahut lambi sheets ko trim karta hai.
 
     IMPORTANT: Zyadatar log-style sheets (Attendance, Tasks, Site Tasks, Sessions,
@@ -81,12 +81,36 @@ def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB) -> str:
     agar trim karna pade to hum sheet ki AAKHIRI (latest) rows rakhte hain, shuru ki
     purani rows nahi -- warna "aaj ka data" jaise sawaalon ka jawab galat/purana aa
     jaata hai.
+
+    today_filter=True hone par, hum khud Python se sirf AAJ ki date wali rows
+    nikaal ke bhejte hain (Gemini pe depend nahi karte row-selection ke liye) --
+    isse ek bhi row miss/skip nahi hoti, jo bade tables mein LLM se hota hai.
     """
     reader = list(csv.reader(io.StringIO(csv_text)))
     if not reader:
         return "(khaali sheet / data nahi mila)"
     header, rows = reader[0], reader[1:]
     rows = [r for r in rows if any(cell.strip() for cell in r)]  # empty rows hatao
+
+    if today_filter:
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        date_variants = [
+            now.strftime("%Y-%m-%d"),   # 2026-07-24
+            now.strftime("%d-%m-%Y"),   # 24-07-2026
+            now.strftime("%d/%m/%Y"),   # 24/07/2026
+            now.strftime("%m/%d/%Y"),   # 07/24/2026
+            now.strftime("%-m/%-d/%Y") if os.name != "nt" else now.strftime("%#m/%#d/%Y"),
+        ]
+        matched = [
+            r for r in rows
+            if any(any(dv in cell for dv in date_variants) for cell in r)
+        ]
+        if matched:
+            rows = matched  # sirf aaj ki rows -- COMPLETE, koi truncation nahi
+            lines = [" | ".join(header)]
+            lines += [" | ".join(r) for r in rows]
+            return "\n".join(lines) + f"\n\n[NOTE: yeh sirf AAJ ({date_variants[0]}) ki rows hain, poori list hai, koi row skip nahi ki gayi]"
+
     truncated = len(rows) > max_rows
     if truncated:
         rows = rows[-max_rows:]  # sabse LATEST rows rakho, purani nahi
@@ -101,6 +125,9 @@ def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB) -> str:
     return text
 
 
+TODAY_KEYWORDS = ["aaj", "today", "abhi", "current"]
+
+
 def today_context() -> str:
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     return (
@@ -109,10 +136,13 @@ def today_context() -> str:
     )
 
 
-def call_gemini(prompt: str, max_retries: int = 3) -> str:
+def call_gemini(prompt: str, max_retries: int = 3, max_output_tokens: int = 4096) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY set nahi hai. README dekho.")
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": max_output_tokens},
+    }
 
     last_error = None
     for attempt in range(max_retries):
@@ -189,13 +219,15 @@ def answer_question(question: str) -> dict:
             "sources": [],
         }
 
+    wants_today = any(kw in question.lower() for kw in TODAY_KEYWORDS)
+
     context_blocks = []
     sources = []
     for spreadsheet_label, tab in picks:
         sid = SPREADSHEETS[spreadsheet_label]["id"]
         try:
             csv_text = fetch_tab_csv(sid, tab)
-            table_text = csv_to_trimmed_text(csv_text)
+            table_text = csv_to_trimmed_text(csv_text, today_filter=wants_today)
         except Exception as e:
             table_text = f"(is tab ka data fetch nahi ho paya: {e})"
         context_blocks.append(
@@ -228,8 +260,12 @@ jaise: Sr.no, Name, Check In, Check Out, Status/Remarks -- exactly us tarah
 jaise ek proper attendance/report sheet dikhti hai. Agar kisi employee ka
 Check Out time khaali hai, to "PENDING" likho. Agar Status column mein
 "Leave" hai, to "LEAVE" likho.
+
+BAHUT ZAROORI: SHEET DATA mein jitni bhi rows di gayi hain, un SABKO table
+mein daalo -- EK BHI row skip/summarize/drop mat karo, chahe list lambi ho.
+Sr.no 1 se lekar aakhri row tak sabko include karo.
 """
-    answer = call_gemini(final_prompt)
+    answer = call_gemini(final_prompt, max_output_tokens=8192)
     return {"answer": answer, "sources": sources}
 
 

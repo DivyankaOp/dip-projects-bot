@@ -24,9 +24,19 @@
   #chat{
     flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px;
   }
-  .msg{max-width:75%; padding:12px 15px; border-radius:14px; line-height:1.5; font-size:14.5px; white-space:pre-wrap;}
-  .user{align-self:flex-end; background:var(--bubble-user); color:white; border-bottom-right-radius:4px;}
-  .bot{align-self:flex-start; background:var(--bubble-bot); border:1px solid var(--border); border-bottom-left-radius:4px;}
+  .msg{max-width:75%; padding:12px 15px; border-radius:14px; line-height:1.5; font-size:14.5px;}
+  .user{align-self:flex-end; background:var(--bubble-user); color:white; border-bottom-right-radius:4px; white-space:pre-wrap;}
+  .bot{align-self:flex-start; background:var(--bubble-bot); border:1px solid var(--border); border-bottom-left-radius:4px; max-width:92%;}
+  .bot p{margin:0 0 8px 0;}
+  .bot p:last-child{margin-bottom:0;}
+  .bot ul, .bot ol{margin:6px 0; padding-left:20px;}
+  .bot strong{color:#fff;}
+  .bot-table-wrap{overflow-x:auto; margin:8px 0;}
+  .bot table{border-collapse:collapse; width:100%; font-size:13.5px;}
+  .bot th, .bot td{border:1px solid var(--border); padding:6px 10px; text-align:left; white-space:nowrap;}
+  .bot th{background:#262b36; color:#fff; font-weight:600;}
+  .bot tr:nth-child(even) td{background:#1a1e27;}
+  .bot code{background:#0f1115; padding:2px 5px; border-radius:4px; font-size:13px;}
   .sources{font-size:11px; color:var(--muted); margin-top:6px;}
   .typing{align-self:flex-start; color:var(--muted); font-size:13px; padding:0 15px;}
   form{
@@ -60,6 +70,7 @@
     <button id="sendBtn" type="submit">Bhejo</button>
   </form>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
 <script>
 const chat = document.getElementById('chat');
 const form = document.getElementById('form');
@@ -69,7 +80,19 @@ const sendBtn = document.getElementById('sendBtn');
 function addMsg(text, cls, sources) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
-  div.textContent = text;
+  if (cls === 'bot') {
+    // Bot ka jawab markdown ho sakta hai (tables, bold, lists) -- usko HTML mein render karo
+    div.innerHTML = marked.parse(text);
+    // Table ko horizontally scrollable wrapper mein daal do (mobile ke liye)
+    div.querySelectorAll('table').forEach(t => {
+      const wrap = document.createElement('div');
+      wrap.className = 'bot-table-wrap';
+      t.parentNode.insertBefore(wrap, t);
+      wrap.appendChild(t);
+    });
+  } else {
+    div.textContent = text;
+  }
   if (sources && sources.length) {
     const s = document.createElement('div');
     s.className = 'sources';

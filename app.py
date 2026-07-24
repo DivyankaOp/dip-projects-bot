@@ -15,8 +15,11 @@ import os
 import csv
 import io
 import json
+import time
 import urllib.parse
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__)
@@ -71,38 +74,74 @@ def fetch_tab_csv(spreadsheet_id: str, sheet_name: str) -> str:
 
 
 def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB) -> str:
-    """CSV ko readable text table mein badalta hai aur bahut lambi sheets ko trim karta hai."""
+    """CSV ko readable text table mein badalta hai aur bahut lambi sheets ko trim karta hai.
+
+    IMPORTANT: Zyadatar log-style sheets (Attendance, Tasks, Site Tasks, Sessions,
+    Daily Checklist Log, etc.) mein NAYI entries sabse NEECHE add hoti hain. Isliye
+    agar trim karna pade to hum sheet ki AAKHIRI (latest) rows rakhte hain, shuru ki
+    purani rows nahi -- warna "aaj ka data" jaise sawaalon ka jawab galat/purana aa
+    jaata hai.
+    """
     reader = list(csv.reader(io.StringIO(csv_text)))
     if not reader:
         return "(khaali sheet / data nahi mila)"
     header, rows = reader[0], reader[1:]
     rows = [r for r in rows if any(cell.strip() for cell in r)]  # empty rows hatao
     truncated = len(rows) > max_rows
-    rows = rows[:max_rows]
+    if truncated:
+        rows = rows[-max_rows:]  # sabse LATEST rows rakho, purani nahi
     lines = [" | ".join(header)]
     lines += [" | ".join(r) for r in rows]
     text = "\n".join(lines)
     if truncated:
-        text += f"\n\n[NOTE: is tab mein aur bhi rows hain, sirf pehli {max_rows} dikhayi gayi hain]"
+        text += (
+            f"\n\n[NOTE: is tab mein aur bhi (purani) rows hain, sirf sabse "
+            f"RECENT {max_rows} rows dikhayi gayi hain]"
+        )
     return text
 
 
-def call_gemini(prompt: str) -> str:
+def today_context() -> str:
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    return (
+        f"Aaj ki date hai: {now.strftime('%Y-%m-%d')} "
+        f"({now.strftime('%A')}), time zone: India (IST)."
+    )
+
+
+def call_gemini(prompt: str, max_retries: int = 3) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY set nahi hai. README dekho.")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    resp = requests.post(
-        GEMINI_URL,
-        params={"key": GEMINI_API_KEY},
-        json=payload,
-        timeout=60,
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                GEMINI_URL,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+                timeout=60,
+            )
+            # 503 / 429 = Gemini abhi busy/overloaded hai -> thodi der ruk ke retry karo
+            if resp.status_code in (429, 500, 503):
+                last_error = f"{resp.status_code} Server busy"
+                time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s backoff
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            try:
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except (KeyError, IndexError):
+                return "Gemini se response parse nahi ho paya: " + json.dumps(data)[:500]
+        except requests.exceptions.RequestException as e:
+            last_error = str(e)
+            time.sleep(2 * (attempt + 1))
+
+    raise RuntimeError(
+        f"Gemini abhi overloaded/unavailable hai, {max_retries} baar try kiya. "
+        f"Thodi der baad phir se pooch lo. (Detail: {last_error})"
     )
-    resp.raise_for_status()
-    data = resp.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError):
-        return "Gemini se response parse nahi ho paya: " + json.dumps(data)[:500]
 
 
 def pick_relevant_tabs(question: str) -> list:
@@ -167,10 +206,12 @@ def answer_question(question: str) -> dict:
     context = "\n\n".join(context_blocks)
 
     final_prompt = f"""Tum ek Project Management System ke liye data assistant ho.
+{today_context()}
+
 Neeche kuch Google Sheet tabs ka actual data diya gaya hai. SIRF isi data ke
 aadhar par user ke sawaal ka accurate jawab do. Agar data mein jawab nahi hai
 to saaf keh do ki "yeh jaankari sheet mein nahi mili", kabhi bhi khud se
-guess/hallucinate mat karo.
+guess/hallucinate mat karo. "Aaj" ka matlab hai upar di gayi aaj ki date.
 
 === SHEET DATA ===
 {context}
@@ -180,6 +221,13 @@ User ka sawaal: {question}
 
 Jawab clear aur seedha do (Hinglish ya jis language mein sawaal poocha gaya
 usi mein), zaroorat ho to numbers/dates/names sheet se exact copy karo.
+
+Agar user ne "list", "report", "sab logo ka", ya multiple entries maangi hain,
+to jawab ek CLEAN TABLE (markdown table: | column | column |) format mein do,
+jaise: Sr.no, Name, Check In, Check Out, Status/Remarks -- exactly us tarah
+jaise ek proper attendance/report sheet dikhti hai. Agar kisi employee ka
+Check Out time khaali hai, to "PENDING" likho. Agar Status column mein
+"Leave" hai, to "LEAVE" likho.
 """
     answer = call_gemini(final_prompt)
     return {"answer": answer, "sources": sources}

@@ -487,6 +487,116 @@ def build_raw_markdown(picks: list, date_variants: set = None) -> str:
     return "\n\n".join(blocks)
 
 
+from datetime import time as _time
+
+
+def extract_time_filter(question: str):
+    """Sawaal mein 'after 9:30' / '9:30 ke baad' / 'before 10 AM' jaisa
+    time-condition dhoondh kar (direction, time) return karta hai, warna None."""
+    # English order: "after 9:30" / "before 10 AM"
+    m = re.search(r"(after|before)\s*(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?", question, re.IGNORECASE)
+    if m:
+        direction = m.group(1).lower()
+        hour, minute, ampm = int(m.group(2)), int(m.group(3) or 0), (m.group(4) or "").lower()
+    else:
+        # Hindi order: "9:30 ke baad" / "9:30 se pehle"
+        m = re.search(r"(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?\s*(ke\s*baad|se\s*pehle)", question, re.IGNORECASE)
+        if not m:
+            return None
+        hour, minute, ampm = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        direction = "after" if "baad" in m.group(4).lower() else "before"
+
+    if ampm == "pm" and hour != 12:
+        hour += 12
+    if ampm == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return ("after" if direction in ("after", "ke baad") else "before"), _time(hour, minute)
+
+
+def parse_time_cell(cell: str):
+    cell = (cell or "").strip()
+    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
+        try:
+            return datetime.strptime(cell, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def build_time_filtered_table(picks: list, date_variants, time_filter) -> str:
+    """Attendance-jaisi tabs mein 'checkin time > /< X' condition ko seedha
+    Python se filter karta hai (Gemini se nahi) -- isse chahe kitni bhi rows
+    (25 din ka data ho ya 2500) hon, output kabhi bhi token-limit se cut nahi
+    hota, kyunki hum khud table bana rahe hain, Gemini se generate nahi
+    karwa rahe."""
+    direction, cutoff = time_filter
+    all_results = []
+    used_any_tab = False
+
+    for label, tab in picks:
+        sid = SPREADSHEETS[label]["id"]
+        try:
+            rows = get_tab_rows(sid, tab)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        header = rows[0]
+        header_lower = [h.strip().lower() for h in header]
+        checkin_idx = next(
+            (i for i, h in enumerate(header_lower) if "check in" in h or "clock in" in h or ("in" in h and "time" in h)),
+            None,
+        )
+        if checkin_idx is None:
+            continue  # yeh tab attendance-type nahi hai, skip karo
+        used_any_tab = True
+        date_idx = next((i for i, h in enumerate(header_lower) if h == "date"), None)
+        name_idx = next((i for i, h in enumerate(header_lower) if "name" in h), None)
+        checkout_idx = next((i for i, h in enumerate(header_lower) if "check out" in h or "clock out" in h), None)
+        status_idx = next((i for i, h in enumerate(header_lower) if "status" in h), None)
+
+        for r in rows[1:]:
+            if not any(c.strip() for c in r):
+                continue
+            if date_variants and not any(any(dv in c for dv in date_variants) for c in r):
+                continue
+            if len(r) <= checkin_idx:
+                continue
+            t = parse_time_cell(r[checkin_idx])
+            if not t:
+                continue
+            match = (t > cutoff) if direction == "after" else (t < cutoff)
+            if not match:
+                continue
+            all_results.append({
+                "date": r[date_idx].strip() if date_idx is not None and len(r) > date_idx else "",
+                "name": r[name_idx].strip() if name_idx is not None and len(r) > name_idx else "",
+                "checkin": r[checkin_idx].strip(),
+                "checkout": (r[checkout_idx].strip() if checkout_idx is not None and len(r) > checkout_idx and r[checkout_idx].strip() else "PENDING"),
+                "status": r[status_idx].strip() if status_idx is not None and len(r) > status_idx else "",
+            })
+
+    if not used_any_tab:
+        return None  # koi attendance-type tab nahi mila, normal Gemini flow use karo
+
+    if not all_results:
+        cutoff_str = cutoff.strftime("%H:%M")
+        return f"Diye gaye date-range mein koi bhi employee {cutoff_str} ke {direction} check-in karta hua nahi mila."
+
+    all_results.sort(key=lambda x: (x["date"], x["checkin"]))
+    lines = ["| Sr. No. | Date | Employee Name | Check In Time | Check Out Time | Status |",
+             "|---|---|---|---|---|---|"]
+    for i, r in enumerate(all_results, 1):
+        lines.append(f"| {i} | {r['date']} | {r['name']} | {r['checkin']} | {r['checkout']} | {r['status']} |")
+
+    direction_hindi = "ke baad" if direction == "after" else "se pehle"
+    cutoff_str = cutoff.strftime("%H:%M")
+    header_text = f"**{cutoff_str} {direction_hindi} check-in karne wale sabhi employees ({len(all_results)} entries):**\n\n"
+    return header_text + "\n".join(lines)
+
+
 def answer_question(question: str, recent_context: str = "") -> dict:
     # Follow-up sawaal (jaise sirf "after 9:30") ke liye purane messages ka
     # context bhi jodo -- taaki tab-routing aur date-range dono sahi milein
@@ -515,6 +625,17 @@ def answer_question(question: str, recent_context: str = "") -> dict:
 
     date_range = extract_date_range(routing_text)
     date_variants = date_range_variants(*date_range) if date_range else None
+
+    # Agar sawaal mein time-condition hai (jaise "after 9:30"), to seedha
+    # Python se filter karke poora, complete jawab do -- Gemini ki zaroorat
+    # nahi, isliye bade date-range (jaise 25 din) mein bhi output kabhi cut
+    # nahi hoga.
+    time_filter = extract_time_filter(routing_text)
+    if time_filter:
+        direct_answer = build_time_filtered_table(picks, date_variants, time_filter)
+        if direct_answer is not None:
+            sources = [f"{label} → {tab}" for label, tab in picks]
+            return {"answer": direct_answer, "sources": sources}
 
     context_blocks, sources = [], []
     for spreadsheet_label, tab in picks:

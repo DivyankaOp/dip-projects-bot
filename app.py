@@ -480,9 +480,13 @@ def build_raw_markdown(picks: list, date_variants: set = None) -> str:
     return "\n\n".join(blocks)
 
 
-def answer_question(question: str) -> dict:
+def answer_question(question: str, recent_context: str = "") -> dict:
+    # Follow-up sawaal (jaise sirf "after 9:30") ke liye purane messages ka
+    # context bhi jodo -- taaki tab-routing aur date-range dono sahi milein
+    routing_text = f"{recent_context}\n{question}" if recent_context else question
+
     try:
-        picks = pick_relevant_tabs(question)
+        picks = pick_relevant_tabs(routing_text)
     except Exception as e:
         return {
             "answer": f"⚠️ Gemini abhi busy/overloaded hai isliye jawab nahi de paya. "
@@ -502,7 +506,7 @@ def answer_question(question: str) -> dict:
             "sources": [],
         }
 
-    date_range = extract_date_range(question)
+    date_range = extract_date_range(routing_text)
     date_variants = date_range_variants(*date_range) if date_range else None
 
     context_blocks, sources = [], []
@@ -678,6 +682,9 @@ def api_ask():
     data = request.get_json(force=True)
     question = (data or {}).get("question", "").strip()
     session_id = (data or {}).get("session_id") or "default"
+    # Frontend pichle 3-4 user messages bhejta hai (context ke liye) -- taaki
+    # "after 9:30" jaisa follow-up sawaal bhi pichli date-range yaad rakh sake
+    recent_context = (data or {}).get("recent_context", "").strip()
     if not question:
         return jsonify({"error": "Sawaal khaali nahi ho sakta"}), 400
     try:
@@ -696,7 +703,7 @@ def api_ask():
         elif act == "pending_reminder":
             return jsonify({"answer": handle_pending_reminder(), "sources": []})
         else:
-            return jsonify(answer_question(question))
+            return jsonify(answer_question(question, recent_context))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -360,6 +360,8 @@ TAB_SYNONYMS = {
     "Site Tasks": ["site task"],
     "Leave Requests": ["leave request", "on leave"],
     "Leaves": ["leave"],
+    "DPRSHEET": ["dpr", "daily progress report", "daily progress"],
+    "WPRInstances": ["wpr", "weekly progress report", "weekly progress"],
 }
 
 
@@ -417,11 +419,25 @@ karo, is exact format mein, kuch aur text mat likho:
         picks = _parse_json_block(raw)
     except Exception:
         return []  # Gemini ne valid JSON nahi diya -- genuinely ambiguous sawaal
+
+    # Gemini kabhi-kabhi spreadsheet/tab naam thoda alag case/spacing mein
+    # likh deta hai (jaise "DPR Sheet" vs "DPRSHEET") -- isliye exact-match
+    # ke bajaye normalized (lowercase, no-space) lookup use karo, warna
+    # valid pick 0 aa jaata hai aur bot "samajh nahi aaya" bol deta hai.
+    def _norm(s):
+        return re.sub(r"\s+", "", (s or "").strip().lower())
+
+    norm_lookup = {}
+    for s_label, cfg in SPREADSHEETS.items():
+        for t in cfg["tabs"]:
+            norm_lookup[(_norm(s_label), _norm(t))] = (s_label, t)
+
     valid = []
     for p in picks:
         s, t = p.get("spreadsheet"), p.get("tab")
-        if s in SPREADSHEETS and t in SPREADSHEETS[s]["tabs"]:
-            valid.append((s, t))
+        pair = norm_lookup.get((_norm(s), _norm(t)))
+        if pair and pair not in valid:
+            valid.append(pair)
     return valid[:5]
 
 

@@ -57,9 +57,14 @@
   .bot p:last-child{margin-bottom:0;}
   .bot ul, .bot ol{margin:6px 0; padding-left:20px;}
   .bot strong{color:#fff;}
-  .bot-table-wrap{overflow-x:auto; margin:8px 0;}
-  .bot table{border-collapse:collapse; width:100%; font-size:13.5px;}
-  .bot th, .bot td{border:1px solid var(--border); padding:6px 10px; text-align:left; white-space:nowrap;}
+  .bot-table-wrap{overflow-x:auto; margin:8px 0; -webkit-overflow-scrolling:touch; position:relative;}
+  .bot-table-wrap::after{
+    content:'⇠ swipe ⇢'; position:sticky; left:0; display:block; text-align:center;
+    font-size:10.5px; color:var(--muted); padding-top:3px;
+  }
+  @media (min-width: 700px){ .bot-table-wrap::after{ display:none; } }
+  .bot table{border-collapse:collapse; width:100%; font-size:13px;}
+  .bot th, .bot td{border:1px solid var(--border); padding:5px 8px; text-align:left; white-space:nowrap;}
   .bot th{background:#262b36; color:#fff; font-weight:600;}
   .bot tr:nth-child(even) td{background:#1a1e27;}
   .bot code{background:#0f1115; padding:2px 5px; border-radius:4px; font-size:13px;}

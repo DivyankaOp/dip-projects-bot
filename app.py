@@ -21,7 +21,7 @@ import time
 import re
 import urllib.parse
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template
 from google.oauth2.service_account import Credentials
@@ -108,12 +108,74 @@ def get_tab_rows(spreadsheet_id: str, sheet_name: str):
     return list(csv.reader(io.StringIO(csv_text)))
 
 
-def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB, today_filter: bool = False) -> str:
+_MONTH_MAP = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_MONTH_NAMES = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+)
+
+
+def extract_date_range(question: str):
+    """Sawaal mein se koi bhi date/date-range dhoondh kar (start_date, end_date)
+    return karta hai. Agar sirf ek date mili, dono same hongi. Kuch na mile to
+    None. Isse "1 July se 24 July tak" jaise sawaal bhi sahi filter hote hain,
+    na ki sirf 'aaj' wale."""
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    found = []
+
+    for m in re.finditer(rf"(\d{{1,2}})(?:st|nd|rd|th)?\s+({_MONTH_NAMES})\.?\s*(\d{{4}})?", question, re.IGNORECASE):
+        day = int(m.group(1))
+        month = _MONTH_MAP.get(m.group(2)[:3].lower())
+        year = int(m.group(3)) if m.group(3) else now.year
+        try:
+            found.append(datetime(year, month, day).date())
+        except (ValueError, TypeError):
+            pass
+
+    for m in re.finditer(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", question):
+        try:
+            found.append(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date())
+        except ValueError:
+            pass
+
+    for m in re.finditer(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", question):
+        try:
+            day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if year < 100:
+                year += 2000
+            found.append(datetime(year, month, day).date())
+        except ValueError:
+            pass
+
+    if not found:
+        return None
+    return min(found), max(found)
+
+
+def date_range_variants(start_date, end_date) -> set:
+    """Diye gaye date range ke har din ke liye alag-alag format variants
+    (jo sheet mein ho sakte hain) generate karta hai."""
+    variants = set()
+    d = start_date
+    while d <= end_date:
+        variants.add(d.strftime("%Y-%m-%d"))
+        variants.add(d.strftime("%d-%m-%Y"))
+        variants.add(d.strftime("%d/%m/%Y"))
+        variants.add(d.strftime("%m/%d/%Y"))
+        d += timedelta(days=1)
+    return variants
+
+
+def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB, date_variants: set = None) -> str:
     """CSV ko readable text table mein badalta hai aur bahut lambi sheets ko trim karta hai.
 
-    today_filter=True hone par sirf AAJ ki date wali rows Python se hi filter
-    karke bheji jaati hain (Gemini pe depend nahi karte) -- isse koi row
-    miss/drop nahi hoti.
+    date_variants diya gaya ho (ek specific date ya date-range ke variants),
+    to sirf un dates wali rows Python se hi filter karke bheji jaati hain
+    (Gemini pe depend nahi karte) -- isse koi row miss/drop nahi hoti, chahe
+    request "aaj" ki ho ya "1 July se 24 July tak" jaisi range ki.
     """
     reader = list(csv.reader(io.StringIO(csv_text)))
     if not reader:
@@ -121,18 +183,11 @@ def csv_to_trimmed_text(csv_text: str, max_rows: int = MAX_ROWS_PER_TAB, today_f
     header, rows = reader[0], reader[1:]
     rows = [r for r in rows if any(cell.strip() for cell in r)]
 
-    if today_filter:
-        now = datetime.now(ZoneInfo("Asia/Kolkata"))
-        date_variants = [
-            now.strftime("%Y-%m-%d"),
-            now.strftime("%d-%m-%Y"),
-            now.strftime("%d/%m/%Y"),
-            now.strftime("%m/%d/%Y"),
-        ]
+    if date_variants:
         matched = [r for r in rows if any(any(dv in cell for dv in date_variants) for cell in r)]
         if matched:
             lines = [" | ".join(header)] + [" | ".join(r) for r in matched]
-            return "\n".join(lines) + f"\n\n[NOTE: yeh sirf AAJ ({date_variants[0]}) ki poori list hai, koi row skip nahi ki gayi]"
+            return "\n".join(lines) + f"\n\n[NOTE: yeh requested date-range ki POORI list hai ({len(matched)} rows), koi row skip nahi ki gayi]"
 
     truncated = len(rows) > max_rows
     if truncated:

@@ -277,7 +277,26 @@ def _parse_json_block(raw: str):
     return json.loads(raw)
 
 
+def keyword_match_tabs(question: str) -> list:
+    """Agar sawaal mein seedha kisi tab ka naam mention hai (jaise 'attendance
+    sheet se lena hai'), to Gemini call kiye bina hi wahi tab match kar do.
+    Fast, free, aur reliable -- Gemini rate-limit ka risk nahi."""
+    q = question.lower().replace(" ", "")
+    matches = []
+    for label, cfg in SPREADSHEETS.items():
+        for tab in cfg["tabs"]:
+            tab_key = tab.lower().replace(" ", "")
+            if tab_key in q:
+                matches.append((label, tab))
+    return matches
+
+
 def pick_relevant_tabs(question: str) -> list:
+    # Fast path: agar tab ka naam seedha sawaal mein hai, Gemini call skip karo
+    kw_matches = keyword_match_tabs(question)
+    if kw_matches:
+        return kw_matches[:5]
+
     catalog_lines = []
     for sheet_label, cfg in SPREADSHEETS.items():
         for tab in cfg["tabs"]:
@@ -297,16 +316,20 @@ saath poochi gayi hain -- tasks + attendance + logins, etc.), to zyada tabs
 karo, is exact format mein, kuch aur text mat likho:
 [{{"spreadsheet": "<spreadsheet name>", "tab": "<tab name>"}}, ...]
 """
+    # NOTE: yahan call_gemini ki exception ko jaan-boojh kar catch NAHI kiya
+    # jaata -- taaki caller (answer_question) ko pata chale ki yeh genuinely
+    # "Gemini busy/fail hua" hai, na ki "sawaal samajh nahi aaya".
+    raw = call_gemini(prompt, max_output_tokens=500)
     try:
-        picks = _parse_json_block(call_gemini(prompt, max_output_tokens=500))
-        valid = []
-        for p in picks:
-            s, t = p.get("spreadsheet"), p.get("tab")
-            if s in SPREADSHEETS and t in SPREADSHEETS[s]["tabs"]:
-                valid.append((s, t))
-        return valid[:5]
+        picks = _parse_json_block(raw)
     except Exception:
-        return []
+        return []  # Gemini ne valid JSON nahi diya -- genuinely ambiguous sawaal
+    valid = []
+    for p in picks:
+        s, t = p.get("spreadsheet"), p.get("tab")
+        if s in SPREADSHEETS and t in SPREADSHEETS[s]["tabs"]:
+            valid.append((s, t))
+    return valid[:5]
 
 
 def detect_action(question: str) -> dict:
@@ -338,7 +361,15 @@ Rules:
 # FEATURE 1: NORMAL Q&A (existing sheet-lookup flow)
 # ---------------------------------------------------------------------------
 def answer_question(question: str) -> dict:
-    picks = pick_relevant_tabs(question)
+    try:
+        picks = pick_relevant_tabs(question)
+    except Exception as e:
+        return {
+            "answer": f"⚠️ Gemini abhi busy/overloaded hai isliye jawab nahi de paya. "
+                      f"Thodi der (30 sec-1 min) ruk kar phir se try karo.\n\n(Detail: {e})",
+            "sources": [],
+        }
+
     if not picks:
         return {
             "answer": (

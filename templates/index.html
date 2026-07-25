@@ -27,6 +27,26 @@
     font-size:12px; padding:6px 12px; border-radius:8px; cursor:pointer;
   }
   #clearBtn:hover{color:#fff; border-color:#dc2626;}
+  #searchBar{
+    padding:10px 20px; background:var(--panel); border-bottom:1px solid var(--border);
+    display:flex; gap:8px;
+  }
+  #searchInput{
+    flex:1; padding:8px 12px; border-radius:8px; border:1px solid var(--border);
+    background:#0f1115; color:var(--text); font-size:13px; outline:none;
+  }
+  #searchInput:focus{border-color:var(--bubble-user);}
+  #searchCount{font-size:12px; color:var(--muted); align-self:center; white-space:nowrap;}
+  .msg-row{display:flex; flex-direction:column; max-width:75%;}
+  .msg-row.bot-row{max-width:92%;}
+  .msg-row.user-row{align-self:flex-end; align-items:flex-end;}
+  .edit-btn{
+    background:none; border:none; color:var(--muted); font-size:11px; cursor:pointer;
+    padding:2px 4px; margin-top:2px; opacity:0.7;
+  }
+  .edit-btn:hover{color:#fff; opacity:1;}
+  .msg.dimmed{opacity:0.25;}
+  .msg.search-match{outline:2px solid var(--accent);}
   #chat{
     flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px;
   }
@@ -88,6 +108,11 @@
     </div>
     <button id="clearBtn" type="button">🗑️ Chat clear karo</button>
   </header>
+
+  <div id="searchBar">
+    <input id="searchInput" type="text" placeholder="🔍 Purani chat mein search karo..." autocomplete="off" />
+    <span id="searchCount"></span>
+  </div>
 
   <div id="chat"></div>
 
@@ -154,12 +179,13 @@ function highlightStatusCells(root) {
   });
 }
 
-// Table ko PDF file ke roop mein download karta hai
+// Table ko PDF file ke roop mein download karta hai, aur download ke saath
+// naye tab mein bhi khol deta hai (preview ke liye)
 function addPdfButton(container, tableEl, title) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'pdf-btn';
-  btn.textContent = '📄 PDF download karo';
+  btn.textContent = '📄 PDF download karo (aur kholo)';
   btn.addEventListener('click', () => {
     try {
       const { jsPDF } = window.jspdf;
@@ -175,7 +201,9 @@ function addPdfButton(container, tableEl, title) {
       doc.setFontSize(13);
       doc.text(title || 'PMS Report', 14, 15);
       doc.autoTable({ head: [head], body: rows, startY: 20, styles: { fontSize: 8 } });
-      doc.save((title || 'pms-report').replace(/[^a-z0-9]/gi, '_') + '.pdf');
+      const filename = (title || 'pms-report').replace(/[^a-z0-9]/gi, '_') + '.pdf';
+      doc.save(filename);           // download
+      window.open(doc.output('bloburl'), '_blank');  // naye tab mein bhi khol do
     } catch (e) {
       alert('PDF banane mein error aayi: ' + e.message);
     }
@@ -183,7 +211,25 @@ function addPdfButton(container, tableEl, title) {
   container.appendChild(btn);
 }
 
+let msgCounter = 0;
+
+function editMessage(idx) {
+  const msg = history[idx];
+  if (!msg) return;
+  // Us message se lekar aakhir tak sab hata do (conversation wahi se dobara shuru hogi)
+  history = history.slice(0, idx);
+  saveHistory(history);
+  chat.innerHTML = '';
+  msgCounter = 0;
+  history.forEach(m => addMsg(m.text, m.cls, m.sources, true));
+  input.value = msg.text;
+  input.focus();
+}
+
 function addMsg(text, cls, sources, skipSave) {
+  const row = document.createElement('div');
+  row.className = 'msg-row ' + (cls === 'user' ? 'user-row' : 'bot-row');
+
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
   if (cls === 'bot') {
@@ -211,8 +257,22 @@ function addMsg(text, cls, sources, skipSave) {
     s.textContent = '📄 Source: ' + sources.join(', ');
     div.appendChild(s);
   }
-  chat.appendChild(div);
+  row.appendChild(div);
+
+  // User message ko edit karke dobara bhejne ka option
+  if (cls === 'user') {
+    const thisIdx = skipSave ? msgCounter : history.length;  // is message ka history-index
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'edit-btn';
+    editBtn.textContent = '✏️ Edit karke dobara bhejo';
+    editBtn.addEventListener('click', () => editMessage(thisIdx));
+    row.appendChild(editBtn);
+  }
+
+  chat.appendChild(row);
   chat.scrollTop = chat.scrollHeight;
+  msgCounter++;
 
   if (!skipSave) {
     history.push({ text, cls, sources: sources || [] });
@@ -317,6 +377,30 @@ if (history.length > 0) {
 } else {
   addMsg('Namaste! Mujhse PMS 3.2 ya 1 june sheet se related koi bhi sawaal pooch sakte ho.', 'bot');
 }
+
+// ---------------- Chat history search ----------------
+const searchInput = document.getElementById('searchInput');
+const searchCount = document.getElementById('searchCount');
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  const allMsgs = chat.querySelectorAll('.msg');
+  if (!q) {
+    allMsgs.forEach(m => m.classList.remove('dimmed', 'search-match'));
+    searchCount.textContent = '';
+    return;
+  }
+  let count = 0;
+  allMsgs.forEach(m => {
+    const match = m.textContent.toLowerCase().includes(q);
+    m.classList.toggle('dimmed', !match);
+    m.classList.toggle('search-match', match);
+    if (match) count++;
+  });
+  searchCount.textContent = count + ' match mila';
+  const firstMatch = chat.querySelector('.search-match');
+  if (firstMatch) firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 </script>
 </body>
 </html>

@@ -67,6 +67,18 @@ SPREADSHEETS = {
             "Insurance", "Expenses", "EMP PROJECT LIST", "TaskEmployees",
         ],
     },
+    # Yeh asli DPR/WPR data waali spreadsheet hai (jo user ne link se di --
+    # "1 june" ki DPRSHEET/WPRInstances sirf khaali placeholder tabs the).
+    "DPR WPR Sheet": {
+        "id": "1uwaMMcQVhqnW3JAM99XpZr6D7Mcz11Rm-nqdB_Ko6d0",
+        "tabs": [
+            "ProgressReport", "SVRInstances", "MorningInstances", "DraftWPR",
+            "DraftDPR", "Man_Scope", "Manpower", "Man_Type", "WorkCategory",
+            "EquipmentName", "EquipmentNames", "EmpTasks", "SkillSet",
+            "MaterialUnit", "MaterialMaster", "SiteImages", "Instructor",
+            "DPRDailyData", "DPRInstances", "WPRInstances",
+        ],
+    },
 }
 
 # Naya task yahan (kaunsi spreadsheet + tab) add hoga
@@ -360,8 +372,21 @@ TAB_SYNONYMS = {
     "Site Tasks": ["site task"],
     "Leave Requests": ["leave request", "on leave"],
     "Leaves": ["leave"],
-    "DPRSHEET": ["dpr", "daily progress report", "daily progress"],
-    "WPRInstances": ["wpr", "weekly progress report", "weekly progress"],
+}
+
+# Kuch tab-naam duplicate hote hain alag-alag spreadsheets mein (jaise
+# "WPRInstances" purani khaali "1 june" sheet mein bhi hai aur asli
+# "DPR WPR Sheet" mein bhi). Isliye DPR/WPR synonyms ko SIRF us specific
+# (spreadsheet, tab) pair par lagao jahan asli data hai -- warna purani
+# khaali sheet bhi har baar match ho kar 5-tab limit mein jagah le legi.
+SCOPED_TAB_SYNONYMS = {
+    ("DPR WPR Sheet", "DPRDailyData"): [
+        "dpr", "wpr", "daily progress report", "weekly progress report",
+        "daily progress", "weekly progress",
+    ],
+    ("DPR WPR Sheet", "DPRInstances"): ["dpr", "daily progress report", "daily progress"],
+    ("DPR WPR Sheet", "WPRInstances"): ["wpr", "weekly progress report", "weekly progress"],
+    ("DPR WPR Sheet", "ProgressReport"): ["dpr", "wpr", "progress report"],
 }
 
 
@@ -377,6 +402,8 @@ def keyword_match_tabs(question: str) -> list:
         for tab in cfg["tabs"]:
             tab_key = tab.lower().replace(" ", "")
             hit = tab_key in q_nospace
+            if not hit and (label, tab) in SCOPED_TAB_SYNONYMS:
+                hit = any(syn in q for syn in SCOPED_TAB_SYNONYMS[(label, tab)])
             if not hit and tab in TAB_SYNONYMS:
                 hit = any(syn in q for syn in TAB_SYNONYMS[tab])
             if hit:

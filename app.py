@@ -290,9 +290,11 @@ saare available spreadsheet tabs ki list hai:
 
 User ka sawaal: "{question}"
 
-Bataao is sawaal ka jawab dhoondhne ke liye kaunse 1-3 tabs sabse zyada
-relevant hain. SIRF ek JSON array return karo, is exact format mein, kuch
-aur text mat likho:
+Bataao is sawaal ka jawab dhoondhne ke liye kaunse tabs (1 se 5 tak) sabse
+zyada relevant hain. Agar sawaal complex hai (jaise multiple cheezein ek
+saath poochi gayi hain -- tasks + attendance + logins, etc.), to zyada tabs
+(4-5) choose karo taaki poora jawab mil sake. SIRF ek JSON array return
+karo, is exact format mein, kuch aur text mat likho:
 [{{"spreadsheet": "<spreadsheet name>", "tab": "<tab name>"}}, ...]
 """
     try:
@@ -302,7 +304,7 @@ aur text mat likho:
             s, t = p.get("spreadsheet"), p.get("tab")
             if s in SPREADSHEETS and t in SPREADSHEETS[s]["tabs"]:
                 valid.append((s, t))
-        return valid[:3]
+        return valid[:5]
     except Exception:
         return []
 
@@ -339,8 +341,13 @@ def answer_question(question: str) -> dict:
     picks = pick_relevant_tabs(question)
     if not picks:
         return {
-            "answer": "Mujhe pakka nahi laga ki yeh sawaal kis sheet/tab se sambandhit hai. "
-                      "Thoda aur specific pooch sakte ho? (jaise project ka naam ya tab ka naam)",
+            "answer": (
+                "Yeh sawaal thoda complex/general hai, mujhe pakka nahi laga ki kis "
+                "sheet/tab se jawab dhoondhu. Thoda tod kar poocho -- jaise:\n\n"
+                "- Project/employee ka **naam** batao\n"
+                "- Ek waqt mein **ek hi cheez** poocho (jaise pehle tasks, phir attendance)\n"
+                "- Kis **tab** se data chahiye woh mention karo (Tasks, Attendance, Drawings, etc.)"
+            ),
             "sources": [],
         }
 

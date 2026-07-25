@@ -415,7 +415,7 @@ Rules:
 # ---------------------------------------------------------------------------
 # FEATURE 1: NORMAL Q&A (existing sheet-lookup flow)
 # ---------------------------------------------------------------------------
-def build_raw_markdown(picks: list, wants_today: bool) -> str:
+def build_raw_markdown(picks: list, date_variants: set = None) -> str:
     """Gemini ke bina, seedha sheet se data nikaal kar ek clean markdown table
     bana deta hai. Yeh Gemini fail/busy hone par fallback ke roop mein use hota hai."""
     blocks = []
@@ -429,12 +429,7 @@ def build_raw_markdown(picks: list, wants_today: bool) -> str:
             header, rows = reader[0], reader[1:]
             rows = [r for r in rows if any(c.strip() for c in r)]
 
-            if wants_today:
-                now = datetime.now(ZoneInfo("Asia/Kolkata"))
-                date_variants = [
-                    now.strftime("%Y-%m-%d"), now.strftime("%d-%m-%Y"),
-                    now.strftime("%d/%m/%Y"), now.strftime("%m/%d/%Y"),
-                ]
+            if date_variants:
                 matched = [r for r in rows if any(any(dv in c for dv in date_variants) for c in r)]
                 rows = matched if matched else rows[-100:]
             else:
@@ -476,13 +471,15 @@ def answer_question(question: str) -> dict:
             "sources": [],
         }
 
-    wants_today = any(kw in question.lower() for kw in TODAY_KEYWORDS)
+    date_range = extract_date_range(question)
+    date_variants = date_range_variants(*date_range) if date_range else None
+
     context_blocks, sources = [], []
     for spreadsheet_label, tab in picks:
         sid = SPREADSHEETS[spreadsheet_label]["id"]
         try:
             csv_text = fetch_tab_csv(sid, tab)
-            table_text = csv_to_trimmed_text(csv_text, today_filter=wants_today)
+            table_text = csv_to_trimmed_text(csv_text, date_variants=date_variants)
         except Exception as e:
             table_text = f"(is tab ka data fetch nahi ho paya: {e})"
         context_blocks.append(f"### Spreadsheet: {spreadsheet_label} | Tab: {tab}\n{table_text}")
@@ -519,7 +516,7 @@ mein daalo -- EK BHI row skip/summarize/drop mat karo.
         # Gemini abhi busy/fail hua -- poori tarah rukne ke bajaye seedha sheet
         # ka RAW data (bina AI formatting/summary ke) dikha do, taaki data mil
         # to jaaye, bas Gemini ki "smart" summary miss ho.
-        raw = build_raw_markdown(picks, wants_today)
+        raw = build_raw_markdown(picks, date_variants)
         return {
             "answer": (
                 f"⚠️ Gemini abhi busy/overloaded hai, isliye AI-summary nahi ban paya. "

@@ -360,6 +360,45 @@ Rules:
 # ---------------------------------------------------------------------------
 # FEATURE 1: NORMAL Q&A (existing sheet-lookup flow)
 # ---------------------------------------------------------------------------
+def build_raw_markdown(picks: list, wants_today: bool) -> str:
+    """Gemini ke bina, seedha sheet se data nikaal kar ek clean markdown table
+    bana deta hai. Yeh Gemini fail/busy hone par fallback ke roop mein use hota hai."""
+    blocks = []
+    for label, tab in picks:
+        sid = SPREADSHEETS[label]["id"]
+        try:
+            reader = get_tab_rows(sid, tab)
+            if not reader:
+                blocks.append(f"### {label} → {tab}\n(khaali sheet)")
+                continue
+            header, rows = reader[0], reader[1:]
+            rows = [r for r in rows if any(c.strip() for c in r)]
+
+            if wants_today:
+                now = datetime.now(ZoneInfo("Asia/Kolkata"))
+                date_variants = [
+                    now.strftime("%Y-%m-%d"), now.strftime("%d-%m-%Y"),
+                    now.strftime("%d/%m/%Y"), now.strftime("%m/%d/%Y"),
+                ]
+                matched = [r for r in rows if any(any(dv in c for dv in date_variants) for c in r)]
+                rows = matched if matched else rows[-100:]
+            else:
+                rows = rows[-100:]
+
+            md = "| " + " | ".join(header) + " |\n"
+            md += "|" + "|".join(["---"] * len(header)) + "|\n"
+            for r in rows:
+                if len(r) < len(header):
+                    r = r + [""] * (len(header) - len(r))
+                else:
+                    r = r[:len(header)]
+                md += "| " + " | ".join(c.replace("|", "/") for c in r) + " |\n"
+            blocks.append(f"### {label} → {tab}\n\n{md}")
+        except Exception as e:
+            blocks.append(f"### {label} → {tab}\n(fetch error: {e})")
+    return "\n\n".join(blocks)
+
+
 def answer_question(question: str) -> dict:
     try:
         picks = pick_relevant_tabs(question)
@@ -418,8 +457,21 @@ to jawab ek CLEAN TABLE (markdown table: | column | column |) format mein do.
 BAHUT ZAROORI: SHEET DATA mein jitni bhi rows di gayi hain, un SABKO table
 mein daalo -- EK BHI row skip/summarize/drop mat karo.
 """
-    answer = call_gemini(final_prompt, max_output_tokens=8192)
-    return {"answer": answer, "sources": sources}
+    try:
+        answer = call_gemini(final_prompt, max_output_tokens=8192)
+        return {"answer": answer, "sources": sources}
+    except Exception as e:
+        # Gemini abhi busy/fail hua -- poori tarah rukne ke bajaye seedha sheet
+        # ka RAW data (bina AI formatting/summary ke) dikha do, taaki data mil
+        # to jaaye, bas Gemini ki "smart" summary miss ho.
+        raw = build_raw_markdown(picks, wants_today)
+        return {
+            "answer": (
+                f"⚠️ Gemini abhi busy/overloaded hai, isliye AI-summary nahi ban paya. "
+                f"Neeche **raw sheet data** direct dikha raha hu (bina AI ke):\n\n{raw}"
+            ),
+            "sources": sources,
+        }
 
 
 # ---------------------------------------------------------------------------

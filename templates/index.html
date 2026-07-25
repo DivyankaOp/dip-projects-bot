@@ -37,6 +37,11 @@
   .bot th{background:#262b36; color:#fff; font-weight:600;}
   .bot tr:nth-child(even) td{background:#1a1e27;}
   .bot code{background:#0f1115; padding:2px 5px; border-radius:4px; font-size:13px;}
+  .badge{display:inline-block; padding:3px 10px; border-radius:5px; font-weight:700; font-size:12.5px;}
+  .badge-pending{background:#dc2626; color:#fff;}
+  .badge-leave{background:#f9c6c9; color:#7a1f1f;}
+  .badge-ontime, .badge-present{background:#16a34a; color:#fff;}
+  .badge-late{background:#f59e0b; color:#1a1a1a;}
   .sources{font-size:11px; color:var(--muted); margin-top:6px;}
   .typing{align-self:flex-start; color:var(--muted); font-size:13px; padding:0 15px;}
   form{
@@ -52,6 +57,12 @@
     color:white; font-weight:600; cursor:pointer; font-size:14px;
   }
   button:disabled{opacity:0.5; cursor:not-allowed;}
+  #micBtn{
+    padding:12px 16px; border-radius:10px; border:1px solid var(--border);
+    background:#0f1115; color:var(--text); cursor:pointer; font-size:16px;
+  }
+  #micBtn.listening{background:#dc2626; border-color:#dc2626; color:#fff; animation:pulse 1s infinite;}
+  @keyframes pulse{0%{opacity:1;}50%{opacity:0.6;}100%{opacity:1;}}
 </style>
 </head>
 <body>
@@ -67,6 +78,7 @@
 
   <form id="form">
     <input id="input" type="text" placeholder="Apna sawaal likho... (jaise: TAJ VIVANTA HOTEL ki latest drawings kya hain?)" autocomplete="off" />
+    <button id="micBtn" type="button" title="Bol kar poocho">🎤</button>
     <button id="sendBtn" type="submit">Bhejo</button>
   </form>
 
@@ -76,7 +88,24 @@ const chat = document.getElementById('chat');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
+const micBtn = document.getElementById('micBtn');
 const sessionId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+
+// Table ke andar PENDING / LEAVE / LATE / ON TIME jaise words ko colored badge bana do
+// (bilkul tumhari attendance PDF report jaisa look)
+function highlightStatusCells(root) {
+  root.querySelectorAll('td').forEach(td => {
+    const t = td.textContent.trim().toUpperCase();
+    let cls = null;
+    if (t === 'PENDING') cls = 'badge-pending';
+    else if (t === 'LEAVE') cls = 'badge-leave';
+    else if (t === 'LATE') cls = 'badge-late';
+    else if (t === 'ON TIME' || t === 'ONTIME' || t === 'PRESENT') cls = 'badge-ontime';
+    if (cls) {
+      td.innerHTML = `<span class="badge ${cls}">${td.textContent.trim()}</span>`;
+    }
+  });
+}
 
 function addMsg(text, cls, sources) {
   const div = document.createElement('div');
@@ -91,6 +120,7 @@ function addMsg(text, cls, sources) {
       t.parentNode.insertBefore(wrap, t);
       wrap.appendChild(t);
     });
+    highlightStatusCells(div);
   } else {
     div.textContent = text;
   }
@@ -103,6 +133,52 @@ function addMsg(text, cls, sources) {
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
   return div;
+}
+
+// ---------------- Voice input (Web Speech API) ----------------
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SpeechRecognition) {
+  const recognition = new SpeechRecognition();
+  recognition.lang = 'en-IN';       // Hinglish/English (Indian accent) samajhne ke liye
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  let listening = false;
+
+  micBtn.addEventListener('click', () => {
+    if (listening) {
+      recognition.stop();
+      return;
+    }
+    try {
+      recognition.start();
+      listening = true;
+      micBtn.classList.add('listening');
+      micBtn.textContent = '⏺️';
+    } catch (e) {
+      // already started ya koi aur error -- chup chaap ignore karo
+    }
+  });
+
+  recognition.addEventListener('result', (e) => {
+    const transcript = e.results[0][0].transcript;
+    input.value = (input.value ? input.value + ' ' : '') + transcript;
+    input.focus();
+  });
+
+  recognition.addEventListener('end', () => {
+    listening = false;
+    micBtn.classList.remove('listening');
+    micBtn.textContent = '🎤';
+  });
+
+  recognition.addEventListener('error', () => {
+    listening = false;
+    micBtn.classList.remove('listening');
+    micBtn.textContent = '🎤';
+  });
+} else {
+  micBtn.disabled = true;
+  micBtn.title = 'Voice input sirf Chrome/Edge browser mein kaam karta hai';
 }
 
 form.addEventListener('submit', async (e) => {

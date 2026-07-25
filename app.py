@@ -162,6 +162,13 @@ def extract_date_range(question: str):
 
     if not found:
         return None
+
+    # "till date" / "aaj tak" / "abhi tak" / "till today" jaise phrase ka
+    # matlab hai range AAJ tak extend honi chahiye
+    open_ended_phrases = ["till date", "till today", "aaj tak", "abhi tak", "abtak", "ab tak"]
+    if any(p in question.lower() for p in open_ended_phrases):
+        found.append(now.date())
+
     return min(found), max(found)
 
 
@@ -540,6 +547,10 @@ usi mein), zaroorat ho to numbers/dates/names sheet se exact copy karo.
 
 Agar user ne "list", "report", "sab logo ka", ya multiple entries maangi hain,
 to jawab ek CLEAN TABLE (markdown table: | column | column |) format mein do.
+Table ko MOBILE-FRIENDLY rakho: sirf zaroori columns dikhao (jaise Date, Name,
+Check In Time, Check Out Time, Status) -- lambi cheezein jaise Photo URL,
+GPS Address, IP Address ko table mein mat daalo (jab tak user ne specifically
+na maanga ho), warna table screen se bahar chala jaata hai.
 
 BAHUT ZAROORI: SHEET DATA mein jitni bhi rows di gayi hain, un SABKO table
 mein daalo -- EK BHI row skip/summarize/drop mat karo.

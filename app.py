@@ -76,7 +76,10 @@ TASK_SHEET = {"spreadsheet": "PMS 3.2", "tab": "Tasks"}
 EMPLOYEE_TABS = [("PMS 3.2", "Employees"), ("1 june", "Employees")]
 
 MAX_ROWS_PER_TAB = 400
-TODAY_KEYWORDS = ["aaj", "today", "abhi", "current"]
+TODAY_KEYWORDS = [
+    "aaj", "today", "abhi", "current", "report", "list", "attendance",
+    "check in", "checkin", "clock in", "clockin", "present", "status",
+]
 
 # In-memory session store: multi-turn "add task" conversation ka state yahan
 # rakha jaata hai (session_id -> state). NOTE: yeh sirf ek server-instance ke

@@ -324,7 +324,10 @@ def send_whatsapp_text(phone_e164: str, message: str):
 # ---------------------------------------------------------------------------
 # GEMINI
 # ---------------------------------------------------------------------------
-def call_gemini(prompt: str, max_retries: int = 3, max_output_tokens: int = 4096) -> str:
+def call_gemini_full(prompt: str, max_retries: int = 3, max_output_tokens: int = 4096):
+    """call_gemini jaisa hi hai, lekin (text, finish_reason) dono return karta
+    hai -- taaki caller check kar sake ki jawab GENUINELY poora bana hai ya
+    beech mein token-limit lagne se kat gaya hai (finish_reason == 'MAX_TOKENS')."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY set nahi hai. README dekho.")
     payload = {
@@ -342,9 +345,12 @@ def call_gemini(prompt: str, max_retries: int = 3, max_output_tokens: int = 4096
             resp.raise_for_status()
             data = resp.json()
             try:
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                cand = data["candidates"][0]
+                text = cand["content"]["parts"][0]["text"].strip()
+                finish_reason = cand.get("finishReason", "")
+                return text, finish_reason
             except (KeyError, IndexError):
-                return "Gemini se response parse nahi ho paya: " + json.dumps(data)[:500]
+                return "Gemini se response parse nahi ho paya: " + json.dumps(data)[:500], "ERROR"
         except requests.exceptions.RequestException as e:
             last_error = str(e)
             time.sleep(2 * (attempt + 1))
@@ -352,6 +358,11 @@ def call_gemini(prompt: str, max_retries: int = 3, max_output_tokens: int = 4096
         f"Gemini abhi overloaded/unavailable hai, {max_retries} baar try kiya. "
         f"Thodi der baad phir se pooch lo. (Detail: {last_error})"
     )
+
+
+def call_gemini(prompt: str, max_retries: int = 3, max_output_tokens: int = 4096) -> str:
+    text, _ = call_gemini_full(prompt, max_retries, max_output_tokens)
+    return text
 
 
 def _parse_json_block(raw: str):
@@ -741,7 +752,18 @@ BAHUT ZAROORI: SHEET DATA mein jitni bhi rows di gayi hain, un SABKO table
 mein daalo -- EK BHI row skip/summarize/drop mat karo.
 """
     try:
-        answer = call_gemini(final_prompt, max_output_tokens=8192)
+        answer, finish_reason = call_gemini_full(final_prompt, max_output_tokens=32768)
+        if finish_reason == "MAX_TOKENS":
+            # Data itna zyada tha ki AI ka jawab beech mein hi kat gaya (jaisa
+            # pichli baar DPR/WPR ke multi-tab report mein hua tha). Aadhi-
+            # adhuri table dikhane ke bajaye poora RAW sheet data dikhao,
+            # taaki koi bhi row miss na ho.
+            raw = build_raw_markdown(picks, date_variants)
+            answer = (
+                "⚠️ Is sawaal ka data itna zyada nikla ki AI-summary beech mein "
+                "hi kat gayi. Isliye neeche **poora raw sheet data** (bina AI "
+                "summary ke, sab rows ke saath) dikha raha hu:\n\n" + raw
+            )
         return {"answer": answer, "sources": sources}
     except Exception as e:
         # Gemini abhi busy/fail hua -- poori tarah rukne ke bajaye seedha sheet

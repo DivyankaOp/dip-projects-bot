@@ -351,10 +351,18 @@ form.addEventListener('submit', async (e) => {
   chat.scrollTop = chat.scrollHeight;
 
   try {
+    // Pichle 3 user messages bhejo (is naye sawaal ke alawa) -- taaki follow-up
+    // sawaal (jaise sirf "after 9:30") purani date-range/context yaad rakh sake
+    const recentUserMsgs = history
+      .filter(m => m.cls === 'user')
+      .slice(-4, -1)   // aakhri wala already 'question' mein hai, usse pehle ke 3
+      .map(m => m.text)
+      .join('\n');
+
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({question, session_id: sessionId})
+      body: JSON.stringify({question, session_id: sessionId, recent_context: recentUserMsgs})
     });
     const data = await res.json();
     typing.remove();

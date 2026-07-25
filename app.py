@@ -597,16 +597,29 @@ def build_time_filtered_table(picks: list, date_variants, time_filter) -> str:
     return header_text + "\n".join(lines)
 
 
+# Agar current question itne kam words ka hai, tabhi use ek "follow-up"
+# maano (jaise "sirf after 9:30", "usi din ka batao"). Lambe/standalone
+# sawaal (jaise DPR/WPR wala poora paragraph) follow-up NAHI hote -- unke
+# liye purana recent_context kabhi use nahi karna chahiye, warna purani
+# attendance/date/time keywords wapis leak ho kar galat jawab de dete hain.
+FOLLOWUP_MAX_WORDS = 8
+
+
+def _looks_like_followup(question: str) -> bool:
+    return len(question.split()) <= FOLLOWUP_MAX_WORDS
+
+
 def answer_question(question: str, recent_context: str = "") -> dict:
-    # Pehle SIRF current question try karo. Purane messages (recent_context)
-    # sirf tabhi jodo jab current question akela kuch na de -- warna ek purana
-    # "attendance ... after 9:30" wala sawaal 3 turns tak har naye, unrelated
-    # sawaal ke jawab ko bhi attendance table bana deta hai (context leakage).
-    routing_text = f"{recent_context}\n{question}" if recent_context else question
+    # Sirf chhote follow-up jaise sawaalon ke liye hi purana context jodo.
+    # Lamba/standalone naya sawaal apne aap mein hi (bina purane context ke)
+    # route hona chahiye -- fail ho to clarification do, purana context
+    # zabardasti mat jodo.
+    is_followup = bool(recent_context) and _looks_like_followup(question)
+    routing_text = f"{recent_context}\n{question}" if is_followup else question
 
     try:
         picks = pick_relevant_tabs(question)
-        if not picks and recent_context:
+        if not picks and is_followup:
             picks = pick_relevant_tabs(routing_text)
     except Exception as e:
         return {
@@ -628,7 +641,7 @@ def answer_question(question: str, recent_context: str = "") -> dict:
         }
 
     date_range = extract_date_range(question)
-    if not date_range and recent_context:
+    if not date_range and is_followup:
         date_range = extract_date_range(routing_text)
     date_variants = date_range_variants(*date_range) if date_range else None
 
@@ -637,7 +650,7 @@ def answer_question(question: str, recent_context: str = "") -> dict:
     # nahi, isliye bade date-range (jaise 25 din) mein bhi output kabhi cut
     # nahi hoga.
     time_filter = extract_time_filter(question)
-    if not time_filter and recent_context:
+    if not time_filter and is_followup:
         time_filter = extract_time_filter(routing_text)
     if time_filter:
         direct_answer = build_time_filtered_table(picks, date_variants, time_filter)

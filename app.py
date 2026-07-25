@@ -92,14 +92,24 @@ TASK_SESSIONS = {}
 # ---------------------------------------------------------------------------
 # GOOGLE SHEETS: READ (public CSV export, "Anyone with link" access)
 # ---------------------------------------------------------------------------
-def fetch_tab_csv(spreadsheet_id: str, sheet_name: str) -> str:
+def fetch_tab_csv(spreadsheet_id: str, sheet_name: str, max_retries: int = 3) -> str:
+    """Sheet ka ek tab CSV format mein fetch karta hai. Bade tabs (jaise 2000+
+    rows wali Attendance) kabhi-kabhi slow/timeout ho sakti hain, isliye retry
+    + lamba timeout diya gaya hai."""
     url = (
         f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq"
         f"?tqx=out:csv&sheet={urllib.parse.quote(sheet_name)}"
     )
-    resp = requests.get(url, timeout=20)
-    resp.raise_for_status()
-    return resp.text
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, timeout=45)
+            resp.raise_for_status()
+            return resp.text
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"'{sheet_name}' tab fetch nahi ho payi, {max_retries} baar try kiya: {last_error}")
 
 
 def get_tab_rows(spreadsheet_id: str, sheet_name: str):
@@ -332,17 +342,38 @@ def _parse_json_block(raw: str):
     return json.loads(raw)
 
 
+# Common synonyms/phrases jo log use karte hain, tab ke exact naam ke bajaye
+TAB_SYNONYMS = {
+    "Attendance": ["clock in", "clock-in", "clockin", "punch in", "punch-in",
+                   "in-time", "in time", "intime", "check in", "check-in",
+                   "checkin", "check out", "checkout", "daily attendance"],
+    "Logins": ["login", "logged in", "log in"],
+    "Sessions": ["session"],
+    "Tasks": ["task list", "to-do", "todo"],
+    "Site Tasks": ["site task"],
+    "Leave Requests": ["leave request", "on leave"],
+    "Leaves": ["leave"],
+}
+
+
 def keyword_match_tabs(question: str) -> list:
-    """Agar sawaal mein seedha kisi tab ka naam mention hai (jaise 'attendance
-    sheet se lena hai'), to Gemini call kiye bina hi wahi tab match kar do.
-    Fast, free, aur reliable -- Gemini rate-limit ka risk nahi."""
-    q = question.lower().replace(" ", "")
+    """Agar sawaal mein seedha kisi tab ka naam (ya uska common synonym) mention
+    hai (jaise 'attendance sheet se lena hai' ya 'clock-in kab kiya'), to Gemini
+    call kiye bina hi wahi tab match kar do. Fast, free, aur reliable -- Gemini
+    rate-limit ka risk nahi."""
+    q_nospace = question.lower().replace(" ", "")
+    q = question.lower()
     matches = []
     for label, cfg in SPREADSHEETS.items():
         for tab in cfg["tabs"]:
             tab_key = tab.lower().replace(" ", "")
-            if tab_key in q:
-                matches.append((label, tab))
+            hit = tab_key in q_nospace
+            if not hit and tab in TAB_SYNONYMS:
+                hit = any(syn in q for syn in TAB_SYNONYMS[tab])
+            if hit:
+                pair = (label, tab)
+                if pair not in matches:
+                    matches.append(pair)
     return matches
 
 

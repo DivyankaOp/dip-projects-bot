@@ -598,12 +598,16 @@ def build_time_filtered_table(picks: list, date_variants, time_filter) -> str:
 
 
 def answer_question(question: str, recent_context: str = "") -> dict:
-    # Follow-up sawaal (jaise sirf "after 9:30") ke liye purane messages ka
-    # context bhi jodo -- taaki tab-routing aur date-range dono sahi milein
+    # Pehle SIRF current question try karo. Purane messages (recent_context)
+    # sirf tabhi jodo jab current question akela kuch na de -- warna ek purana
+    # "attendance ... after 9:30" wala sawaal 3 turns tak har naye, unrelated
+    # sawaal ke jawab ko bhi attendance table bana deta hai (context leakage).
     routing_text = f"{recent_context}\n{question}" if recent_context else question
 
     try:
-        picks = pick_relevant_tabs(routing_text)
+        picks = pick_relevant_tabs(question)
+        if not picks and recent_context:
+            picks = pick_relevant_tabs(routing_text)
     except Exception as e:
         return {
             "answer": f"⚠️ Gemini abhi busy/overloaded hai isliye jawab nahi de paya. "
@@ -623,14 +627,18 @@ def answer_question(question: str, recent_context: str = "") -> dict:
             "sources": [],
         }
 
-    date_range = extract_date_range(routing_text)
+    date_range = extract_date_range(question)
+    if not date_range and recent_context:
+        date_range = extract_date_range(routing_text)
     date_variants = date_range_variants(*date_range) if date_range else None
 
     # Agar sawaal mein time-condition hai (jaise "after 9:30"), to seedha
     # Python se filter karke poora, complete jawab do -- Gemini ki zaroorat
     # nahi, isliye bade date-range (jaise 25 din) mein bhi output kabhi cut
     # nahi hoga.
-    time_filter = extract_time_filter(routing_text)
+    time_filter = extract_time_filter(question)
+    if not time_filter and recent_context:
+        time_filter = extract_time_filter(routing_text)
     if time_filter:
         direct_answer = build_time_filtered_table(picks, date_variants, time_filter)
         if direct_answer is not None:

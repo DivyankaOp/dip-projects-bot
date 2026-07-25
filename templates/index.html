@@ -16,11 +16,17 @@
   }
   header{
     padding:16px 20px; background:var(--panel); border-bottom:1px solid var(--border);
-    display:flex; align-items:center; gap:10px;
+    display:flex; align-items:center; gap:10px; justify-content:space-between;
   }
+  header .left{display:flex; align-items:center; gap:10px;}
   header .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);}
   header h1{font-size:16px; margin:0; font-weight:600;}
   header p{margin:0; font-size:12px; color:var(--muted);}
+  #clearBtn{
+    background:transparent; border:1px solid var(--border); color:var(--muted);
+    font-size:12px; padding:6px 12px; border-radius:8px; cursor:pointer;
+  }
+  #clearBtn:hover{color:#fff; border-color:#dc2626;}
   #chat{
     flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px;
   }
@@ -63,15 +69,24 @@
   }
   #micBtn.listening{background:#dc2626; border-color:#dc2626; color:#fff; animation:pulse 1s infinite;}
   @keyframes pulse{0%{opacity:1;}50%{opacity:0.6;}100%{opacity:1;}}
+  .pdf-btn{
+    margin-top:10px; display:inline-flex; align-items:center; gap:6px;
+    background:#dc2626; color:#fff; border:none; padding:7px 14px;
+    border-radius:8px; font-size:12.5px; font-weight:600; cursor:pointer;
+  }
+  .pdf-btn:hover{background:#b91c1c;}
 </style>
 </head>
 <body>
   <header>
-    <div class="dot"></div>
-    <div>
-      <h1>PMS Sheet Assistant</h1>
-      <p>Live Google Sheets data + Gemini AI</p>
+    <div class="left">
+      <div class="dot"></div>
+      <div>
+        <h1>PMS Sheet Assistant</h1>
+        <p>Live Google Sheets data + Gemini AI</p>
+      </div>
     </div>
+    <button id="clearBtn" type="button">🗑️ Chat clear karo</button>
   </header>
 
   <div id="chat"></div>
@@ -83,13 +98,45 @@
   </form>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
 const chat = document.getElementById('chat');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
-const sessionId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+const clearBtn = document.getElementById('clearBtn');
+
+const SESSION_KEY = 'pms_session_id';
+const HISTORY_KEY = 'pms_chat_history';
+
+// Session ID ek baar banega aur localStorage mein save rahega -- taaki
+// "add task" jaisi multi-turn conversation reload ke baad bhi chalti rahe
+let sessionId = localStorage.getItem(SESSION_KEY);
+if (!sessionId) {
+  sessionId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  localStorage.setItem(SESSION_KEY, sessionId);
+}
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveHistory(history) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch (e) {
+    // storage full ya blocked -- chup chaap ignore karo
+  }
+}
+
+let history = loadHistory();
 
 // Table ke andar PENDING / LEAVE / LATE / ON TIME jaise words ko colored badge bana do
 // (bilkul tumhari attendance PDF report jaisa look)
@@ -107,7 +154,36 @@ function highlightStatusCells(root) {
   });
 }
 
-function addMsg(text, cls, sources) {
+// Table ko PDF file ke roop mein download karta hai
+function addPdfButton(container, tableEl, title) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pdf-btn';
+  btn.textContent = '📄 PDF download karo';
+  btn.addEventListener('click', () => {
+    try {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      const rows = [];
+      const head = [];
+      tableEl.querySelectorAll('thead th').forEach(th => head.push(th.textContent.trim()));
+      tableEl.querySelectorAll('tbody tr').forEach(tr => {
+        const row = [];
+        tr.querySelectorAll('td').forEach(td => row.push(td.textContent.trim()));
+        rows.push(row);
+      });
+      doc.setFontSize(13);
+      doc.text(title || 'PMS Report', 14, 15);
+      doc.autoTable({ head: [head], body: rows, startY: 20, styles: { fontSize: 8 } });
+      doc.save((title || 'pms-report').replace(/[^a-z0-9]/gi, '_') + '.pdf');
+    } catch (e) {
+      alert('PDF banane mein error aayi: ' + e.message);
+    }
+  });
+  container.appendChild(btn);
+}
+
+function addMsg(text, cls, sources, skipSave) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
   if (cls === 'bot') {
@@ -121,6 +197,11 @@ function addMsg(text, cls, sources) {
       wrap.appendChild(t);
     });
     highlightStatusCells(div);
+    // Agar table hai to PDF download button bhi dikhao
+    const firstTable = div.querySelector('table');
+    if (firstTable) {
+      addPdfButton(div, firstTable, 'PMS Report');
+    }
   } else {
     div.textContent = text;
   }
@@ -132,8 +213,22 @@ function addMsg(text, cls, sources) {
   }
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
+
+  if (!skipSave) {
+    history.push({ text, cls, sources: sources || [] });
+    saveHistory(history);
+  }
   return div;
 }
+
+clearBtn.addEventListener('click', () => {
+  if (!confirm('Poori chat history clear kar du?')) return;
+  history = [];
+  saveHistory(history);
+  localStorage.removeItem(SESSION_KEY);
+  chat.innerHTML = '';
+  location.reload();
+});
 
 // ---------------- Voice input (Web Speech API) ----------------
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -216,7 +311,12 @@ form.addEventListener('submit', async (e) => {
   input.focus();
 });
 
-addMsg('Namaste! Mujhse PMS 3.2 ya 1 june sheet se related koi bhi sawaal pooch sakte ho.', 'bot');
+// Page load hote hi purani chat history restore karo, warna welcome message dikhao
+if (history.length > 0) {
+  history.forEach(m => addMsg(m.text, m.cls, m.sources, true));
+} else {
+  addMsg('Namaste! Mujhse PMS 3.2 ya 1 june sheet se related koi bhi sawaal pooch sakte ho.', 'bot');
+}
 </script>
 </body>
 </html>
